@@ -11,7 +11,7 @@ This repository contains the MATLAB analysis code associated with the paper:
 
 The code implements three fMRI analysis pipelines using SPM12:
 
-- **Univariate analysis** — preprocessing, first-level GLM, and second-level group statistics
+- **Univariate analysis** — preprocessing, first-level GLM
 - **RSA (Representational Similarity Analysis)** — searchlight RSA using the [Viviani et al. toolbox](https://github.com/viviani-rsa/rsa-rsm)
 - **PPI (Psychophysiological Interaction)** — seed-based functional connectivity analysis
 
@@ -40,37 +40,18 @@ matlab_codes_for_publication/
 │
 ├── fun_univariate/                  
 │   ├── cos_run_preproc_1lev.m       # Univariate entry function for preprocessing and first level
-│   ├── cos_run_secondlevel.m        # Univariate entry function for second level
 │   ├── fun/                         # univariate helper functions
 │   └── error/                       # log in case of errors during univariate analysis
 │
 ├── fun_RSA/                         # RSA-specific functions
 │   ├── cos_rsa_run_firstlevel.m     # RSA entry function for first level
-│   ├── cos_rsa_run_secondlevel.m    # RSA entry function for second level
 │   ├── fun/                         # RSA helper functions
 │   └── error/
 │
 ├── fun_PPI/                         # PPI-specific functions
 │   ├── cos_run_ppi.m                # PPI entry function for first level
-│   ├── cos_run_ppi_secondlevel.m    # PPI entry function for second level 
 │   ├── fun/                         # PPI helper functions
 │   └── error/
-│
-├── results_univariate/                
-│   ├── COST/                       # MRI data after univariate analyses (group 1)
-│   ├── COSSA/                      # MRI data after univariate analyses (group 2)
-│   └── SecondLevel/                # MRI data after second level univariate analyses
-│
-├── results_RSA/                
-│   ├── COST/                       
-│   ├── COSSA/ 
-│   ├── rsm/                       # RSMs computed from pre-studies used in searchlight analysis
-│   └── SecondLevel/   
-│
-├── results_univariate/                
-│   ├── COST/                       
-│   ├── COSSA/   
-│   └── SecondLevel/  
 
 ```
 
@@ -96,10 +77,6 @@ All analyses are controlled via **entry point scripts**. Open the relevant scrip
 % Preprocessing + first-level GLM (subject indices as input)
 cos_run_preproc_1lev(1:N)
 
-% Second-level group statistics
-cos_run_secondlevel('one')    % one-sample t-test
-cos_run_secondlevel('two')    % two-sample t-test
-cos_run_secondlevel('both')   % both
 ```
 
 ### RSA
@@ -117,10 +94,6 @@ cos_rsa_run_firstlevel(1:N, 'spm')
 cos_rsa_run_firstlevel(1:N, 'searchlight')
 cos_rsa_run_firstlevel(1:N, 'postprocess')
 
-% Second-level group statistics
-cos_rsa_run_secondlevel('one')
-cos_rsa_run_secondlevel('two')
-cos_rsa_run_secondlevel('both')
 ```
 
 ### PPI
@@ -129,10 +102,6 @@ cos_rsa_run_secondlevel('both')
 % First-level PPI maps per subject
 cos_run_ppi(1:N)
 
-% Second-level group statistics
-cos_run_ppi_secondlevel('one')
-cos_run_ppi_secondlevel('two')
-cos_run_ppi_secondlevel('both')
 ```
 
 ---
@@ -158,9 +127,6 @@ results_univariate/
         run_*/          # preprocessed functional data
         anat/           # preprocessed anatomical data
         glm_emo/        # first-level SPM model
-    SecondLevel/
-        OneSample/<contrast>/
-        TwoSample/<contrast>/
 
 results_RSA/
     rsm/                # RSM files (model RDMs)
@@ -168,15 +134,10 @@ results_RSA/
         preprocessing/  # resliced functional images
         glm_rsanative/  # first-level RSA GLM
         searchlight/    # individual RSA maps
-    SecondLevel/
-        OneSample/<rsm_name>/
-        TwoSample/<rsm_name>/
 
 results_PPI/
     <subject>/<seed>/   # individual PPI maps
-    SecondLevel/
-        OneSample/<seed>/<contrast>/
-        TwoSample/<seed>/<contrast>/
+    
 ```
 
 ---
