@@ -1,0 +1,531 @@
+function cos_estimate_SPM_video(D)
+% COS_ESTIMATE_SPM_VIDEO  First-level GLM specification and estimation (SPM12)
+%
+% This function specifies and estimates a first-level fMRI model using SPM12
+% for a single subject; and defines contrasts. It is designed to be called 
+% internally by cos_run_preproc_1lev after preprocessing has been completed.
+%
+% The model includes:
+%   - Parametric modulators derived from behavioral pre-studies
+%   - Event-related regressors (context, face, neutral)
+%   - Motion parameters and session effects as confounds
+%
+% -------------------------------------------------------------------------
+% USAGE
+% -------------------------------------------------------------------------
+%   cos_estimate_SPM_video(D)
+%
+% INPUT
+%   D : structure containing subject-specific parameters and paths.
+%       Created in cos_preproc_1lev_batch.
+%
+%       Required fields include:
+%           - D.sub_dir        : subject results directory (preprocessed data)
+%           - D.glmpath        : output directory for GLM
+%           - D.path.behav     : behavioral data directory
+%           - D.subdata        : subject-specific trial info (.mat)
+%           - D.nscans         : number of scans per session
+%           - D.tr             : repetition time (seconds)
+%           - D.filt           : regex to select preprocessed functional images
+%
+% -------------------------------------------------------------------------
+% MODEL OVERVIEW
+% -------------------------------------------------------------------------
+% The design matrix includes the following regressors:
+%
+%   1. acc_dom_PR    : dominant emotion accuracy (parametric)
+%   2. acc_comp_PR   : competing emotions accuracy (parametric)
+%   3. unc_dom_PR    : dominant emotion uncertainty (parametric)
+%   4. unc_comp_PR   : competing emotions uncertainty (parametric)
+%   5. Emo_PR        : unmodulated emotion regressor 
+%   6. NN_PR         : neutral condition (RT-based)
+%   7. Contxt        : context (video duration)
+%   8. Face          : face/emotion recognition (video duration)
+%
+% Additional regressors:
+%   - 6 motion parameters per run
+%   - Session constants
+%
+% -------------------------------------------------------------------------
+% BEHAVIORAL REGRESSORS
+% -------------------------------------------------------------------------
+% Regressors are constructed from multiple sources:
+%
+%   - Pre-study 1:
+%       Emotion probability ratings (emoindiv)
+%
+%   - Pre-study 2:
+%       Reaction times (RT) for each context
+%
+%   - MRI study:
+%       Trial-wise onsets and behavioral responses (D.subdata)
+%
+% Derived measures:
+%   - Accuracy (mean of lognormal fit)
+%   - Uncertainty (std of lognormal fit)
+%
+% Regressors are mean-centered and neutral/incorrect trials are excluded.
+%
+% -------------------------------------------------------------------------
+% TEMPORAL MODELING
+% -------------------------------------------------------------------------
+% - Stick functions defined at millisecond resolution
+% - Convolution with canonical HRF (SPM default)
+% - Downsampling to TR
+%
+% A matrix of stick functions (SF) is saved for reuse (e.g., PPI analysis):
+%   D.glmpath/SF.mat
+%
+% -------------------------------------------------------------------------
+% INPUT DATA REQUIREMENTS
+% -------------------------------------------------------------------------
+% Preprocessed functional data must exist in:
+%   D.sub_dir/run_*/ 
+%
+% Files must match:
+%   D.filt (e.g., '^swafcos.*\.nii$')
+%
+% Motion parameter files:
+%   rp_*.txt (one per run)
+%
+% Behavioral files:
+%   - trialinfo_MRIstudy/*.mat
+%   - infRT_prestudy/*.xlsx
+%   - infotask/*.xlsx
+%   - emointensity_prestudy/*ctxt.mat
+%
+% -------------------------------------------------------------------------
+% OUTPUTS
+% -------------------------------------------------------------------------
+% In D.glmpath:
+%   - SPM.mat              : model specification
+%   - beta_*.nii           : parameter estimates
+%   - ResMS.nii, mask.nii  : residuals and mask
+%   - con_*.nii            : contrast images
+%   - spmT_*.nii           : statistical maps
+%   - SF.mat               : stick function regressors (for PPI)
+%
+% -------------------------------------------------------------------------
+% CONTRASTS
+% -------------------------------------------------------------------------
+% The following T-contrasts are defined:
+%   - ME_acc       : main effect of accuracy
+%   - ME_unc       : main effect of uncertainty
+%   - CvsD_acc     : competing vs dominant (accuracy)
+%   - DvsC_acc     : dominant vs competing (accuracy)
+%   - CvsD_unc     : competing vs dominant (uncertainty)
+%   - DvsC_unc     : dominant vs competing (uncertainty)
+%
+% -------------------------------------------------------------------------
+% DEPENDENCIES
+% -------------------------------------------------------------------------
+%   - SPM12 (spm_spm, spm_hrf, spm_select, spm_jobman)
+%   - Statistics Toolbox (fitdist)
+%   - Custom functions:
+%       get_files.m
+%       get_spmdesign.m
+%       msdf.m
+%
+% -------------------------------------------------------------------------
+% IMPORTANT NOTES
+% -------------------------------------------------------------------------
+% - This function assumes strict consistency between behavioral and MRI data.
+% - No automatic checks for missing or misaligned trials are performed.
+% - Neutral trials and incorrect responses are explicitly excluded from
+%   parametric modulation.
+% - The design matrix is constructed manually (not via SPM GUI), which
+%   increases flexibility but requires careful validation.
+%
+% -------------------------------------------------------------------------
+%% load task / pre-studies / MRI-study info 
+% extract data from pre-studies 1 and 2 (intensities of emotions and  inference
+% timing) to later compute RT and parameters (accuracy/uncertainty* dominant/
+% competing) and use these variables to create fMRI regressors
+
+% define file containing info of inference timing (RT) from pre-study 2
+Fn   = fullfile(D.path.behav,'infRT_prestudy','item_sujet_RT_ctxt_pretests2.xlsx');
+
+% task info
+[jk,ctxlist]    = xlsread(Fn,1,'A2:A121'); % extract contexts list. Load behavioral regressors from pre-study 2 (RTs per context)
+[jk,listemo]    = xlsread(fullfile(D.path.behav,'infotask','infoemo.xlsx'),'E2:E121'); % extract emotion to be inferred for each context
+
+% load individual trial_info
+load(D.subdata) % onset, resp... for subject S from MRI study
+
+% define emo idx
+emolabel = {'Colère','Surprise','Embarras','Fierté','Neutre'}; % (must match behavioral coding scheme)
+nctx     = size(ctxlist,1);
+idxemo   = [];
+
+for e = 1:length(emolabel)
+    idx             = strcmp(listemo(:,1),emolabel{e});
+    idxemo(e,:)   = find(idx);
+end
+
+[rtCxt,jk]          = xlsread(Fn,1,'B2:BE121'); % extract table cxt*sub containing RTs from pre-study 2
+
+% get emo probability from pre-study 1
+ctxfile     = get_files(fullfile(D.path.behav,'emointensity_prestudy'),'*ctxt.mat');
+
+%% indices computation
+% for each context video, compute mean (accuracy) and standard deviation 
+% (uncertainty)
+
+% emoindiv is trial * emotion * subject from prestudy 1
+% contains rating of probability of emotions
+emoindiv = [];
+for suj=1:size(ctxfile,1)
+    load(strtrim(ctxfile(suj,:)));
+    emoindiv(:,:,suj) = emo_ctxt_120;
+end
+
+% Compute accuracy/uncertainty dominant/competing parameters %%%%%
+dom_acc       = [];
+dom_unc       = [];
+comp_acc       = [];
+comp_unc      = [];
+
+emocat = repmat([1:5]',1,24);
+
+orderemo_pilot = [4 1 5 2 3]; % order: pride, anger, neutral, surprise, embarassment
+for i = 1:120
+    idimg = find(idxemo(:,:)==i);
+    img_emo = find(orderemo_pilot==emocat(idimg)); % find idx of dominant emotion for trial i
+    otheremo = setdiff([1 2 4 5],img_emo); % find idx of competing emotions for trial i
+    if img_emo ~= 3 % (3 = neutral)
+        
+        % dominant emotion
+        w       = fitdist(squeeze(emoindiv(i,img_emo,:))+1,'lognormal'); % Fit log-normal distribution to subjective probability ratings
+        dom_acc(i,1) = w.mu; % mean = accuracy
+        dom_unc(i,1) = w.sigma; % std = uncertainty
+        
+        % competing emotions
+        w       = fitdist(squeeze(nanmean(emoindiv(i,otheremo,:),2))+1,'lognormal');
+        comp_acc(i,1) = w.mu;
+        comp_unc(i,1) = w.sigma;
+        
+    else % neutral
+        dom_acc(i,1) = nan;
+        dom_unc(i,1) = nan;
+        
+        comp_acc(i,1) = nan;
+        comp_unc(i,1) = nan;
+    end
+end
+
+% structure for regressors
+% mean-centering
+ind_cxt = [];
+ind_cxt(:,:,1) = dom_acc-nanmean(dom_acc); % accuracy of dominant emotion
+ind_cxt(:,:,2) = comp_acc-nanmean(comp_acc); % accurary of competing emotion
+ind_cxt(:,:,3) = dom_unc-nanmean(dom_unc); % uncertainty of dominant emotion
+ind_cxt(:,:,4) = comp_unc-nanmean(comp_unc); % uncertainty of competing emotions
+ind_cxt(:,:,5) = ones(120,1); % for unmodulated emotion regressor
+
+% Neutral trials are excluded from parametric modulation (set to 0)
+ind_cxt(idxemo(5,:),:,:)    = 0;
+
+% Trial with no response are excluded from parametric modulation (set to 0)
+RNC                   = cell2mat(trial_info(:,9)); % trial_info(:,9) = response accuracy : 0 if uncorrect, 1 if correct
+idx_RNC             = find(RNC==0);
+ind_cxt(idx_RNC,:,:) = 0;
+
+
+%% Prepare creation of regressors
+
+% get event duration
+[ctxdur,ab]    = xlsread(fullfile(D.path.behav,'infotask','infoemo.xlsx'),'J2:J121'); % extract list of trial duration (inference videos)
+facedur = 4000; % duration of emotion recognition videos
+
+% parameters
+RT          = D.tr;
+nscan       = D.nscans{1};
+msduration  = round((sum(nscan)*RT)*1000); % total duration in ms
+starvec     = zeros(1,msduration); % empty vector
+sessorder   = [1:30;31:60;61:90;91:120]; % number of video contexts for each fMRI session
+
+
+% parameters HRF
+dt      = .001; % should be set to 1 ms (same as vector P)
+TR      = RT;
+fMRI_T  = TR*1000;
+Ns      = sum(nscan);
+fMRI_T0 = fMRI_T/2;
+p       = [6 16 1 1 6 0 32]; % spm default parameter for canonical HRF (see spm_get_defaults('stats.fmri.hrf'))
+hrf     = spm_hrf(dt,p,fMRI_T); % Canonical HRF from SPM (time resolution = 1 ms)
+
+itemorder = vertcat(trial_info{:,3}); % trial_info{:,3} = column of subject item presentation order
+
+% assign session index (1:4) on trial order mapping -> % Critical for correct temporal alignment of regressors
+sesidx = [];
+for ses = 1:D.nSessions
+    sesidx(find(ismember(itemorder,sessorder(ses,:)))) = ses; 
+end
+
+
+%%%%%%%%%%%%%%%%%%%%%%%%
+%
+% Create Regressor %%%%%
+%
+%%%%%%%%%%%%%%%%%%%%%%%%
+
+Xx           = [];
+DC          = starvec; % initialization of duration context (inference video)
+DF          = starvec; % initialization of duration Face (recognition video)
+
+SF          = []; % stick function
+
+% loop parameters (acc/unc*dom/comp + unmodulated emotion)
+for ind = 1:size(ind_cxt,3)
+
+    P          = starvec; % prediction context
+
+    onscxt = vertcat(trial_info{:,4}); % onsets of inference videos
+    onsvsg = vertcat(trial_info{:,5}); % onsets of recognition videos
+    
+    % converts behavioral events into high-resolution binary time series
+    for i = 1:length(onscxt)
+
+        nS          = sesidx(i);
+        extratime   = sum(nscan(1:nS-1),2)*RT;
+
+        % context - prediction (4 parametric modulators + 1 unmodulated)
+        ons         = onscxt(i) + round(extratime*1000);
+        sp          = rtCxt(i,:) + ons;
+        sp(isnan(sp)) = [];
+        P(sp)       = ind_cxt(i,1,ind);
+
+        % context - duration 
+        sp      = repmat(ons,1,ctxdur(i));
+        DC(sp)  = 1;
+
+        % face - duration
+        ons         = onsvsg(i) + round(extratime*1000);
+        sp = repmat(ons,1,facedur);
+        DF(sp) = 1;
+
+    end
+
+    SF = [SF,[P']];
+
+
+end
+
+% neutral - cxt & face
+N_P  = starvec;
+idxcontx = idxemo(5,:); % idx neutral cxt
+onscxt   = vertcat(trial_info{idxcontx,4}); % onset neutral cxt
+
+for i=1:size(idxemo(5,:),2)
+
+    nS          = sesidx(idxcontx(i));
+    extratime   = sum(nscan(1:nS-1),2)*RT;
+
+    % context - neutral
+    ons           = onscxt(i) + round(extratime*1000);
+    sp            = rtCxt(idxcontx(i),:) + ons;
+    sp(isnan(sp)) = [];
+    N_P(sp)        = 1; %1 for RT of neutral items
+end
+
+SF=[SF,[N_P',DC',DF']]; % adding neutral, context duration and face duration 
+
+% for PPI 
+fnsf = fullfile(D.glmpath,'SF.mat');
+save(fnsf,'SF');
+
+%%
+% fMRI regressor
+% ------------------------------------
+
+% stick function and convolution
+for e = 1:size(SF,2)
+    
+    input = SF(:,e);
+    [sdf kernel] = msdf(input,'Gauss',3000);
+    
+    x1 = conv(sdf,hrf);
+
+    x1 =x1((0:(Ns - 1))*fMRI_T + fMRI_T0,:);
+    Xx(:,e) = x1;
+end
+
+%%%%%%%%%%%%%%%%%%%%%%%%
+%
+% SPM %%%%%%%%%%%%%%%%%%
+%
+%%%%%%%%%%%%%%%%%%%%%%%%
+
+
+SPM = [];
+
+% number of scans and sessions
+%---------------------------------------------------------------------------
+SPM.nscan          = [D.nscans{1}];
+nses               = length(SPM.nscan);
+
+
+% Trial specification: Onsets, duration (UNITS) and parameters for modulation
+%---------------------------------------------------------------------------
+
+% regressors names
+cnam = {};
+cnam{1} = 'acc_dom_PR';  % accuracy of dominant emotion
+cnam{2} = 'acc_comp_PR'; % accurary of competing emotion
+cnam{3} = 'unc_dom_PR';  % uncertainty of dominant emotion
+cnam{4} = 'unc_comp_PR'; % uncertainty of competing emotions
+cnam{5} = 'Emo_PR';      % unmodulated emotion 
+cnam{6} = 'NN_PR';       % unmodulated neutral
+cnam{7} = 'Contxt';      % Context duration
+cnam{8} = 'Face';        % Face duration
+
+   
+ncon = length(cnam);
+    
+for c=1:ncon
+    SPM.Sess(1).U(c).name      = {cnam{c}};
+    SPM.Sess(1).U(c).P(1).name = 'none';
+    SPM.Sess(1).Fc(c).i = c;
+    SPM.Sess(1).Fc(c).name = cnam{c};
+    SPM.Sess(1).Fc(c).p = 1;
+end
+
+% design (user specified covariates, eg movement parameters)
+%---------------------------------------------------------------------------
+
+rnam = {'X','Y','Z','x','y','z'}; % movement parameters
+M = [];Xb = [];bkname = {};mvtname= {};
+Sess = [];
+
+% loop runs - store confound regressors (movement, run effect)
+for ses=1:length(D.nscans{1})
+    
+    sessdir{ses}        = fullfile(D.sub_dir,[sprintf('run_%d',ses)]);
+    fn                  = get_files(sessdir{ses},'rp_*.txt'); % find rp_ file in the corresponding run
+    [r1,r2,r3,r4,r5,r6] = textread(fn,'%f%f%f%f%f%f');
+    
+    % Six rigid-body motion parameters per run
+    % detrended before inclusion in GLM
+    C                   = [r1 r2 r3 r4 r5 r6];
+    
+    % add motion matrix
+    M     = blkdiag(M,spm_detrend(C));
+    
+    % Sess row
+    Sess(ses).row = size(Xb,1) + (1:nscan(ses));
+    
+    % Confounds: Session effects
+    B     = ones(nscan(ses),1);
+    Xb    = blkdiag(Xb,B);
+    
+    % name
+    bkname{ses} = sprintf('SesEffect%d',ses);
+    for r = 1:length(rnam)
+        mvtname = [mvtname,sprintf('%s%d',rnam{r},ses)];
+    end
+      
+end
+
+Xx = [Xx,M]; % add movement regressors
+
+SPM.xX.X    = [Xx Xb]; % add session effect regressors
+SPM.xX.iH   = [];
+SPM.xX.iC   = 1:size(Xx,2);
+SPM.xX.iB   = (1:size(Xb,2)) + size(Xx,2);
+SPM.xX.iG   = [];
+SPM.xX.name = {cnam{:} mvtname{:} bkname{:}}; % inform regressors names
+
+% global normalization: OPTIONS:'Scaling'|'None'
+%---------------------------------------------------------------------------
+SPM.xGX.iGXcalc    = 'None';
+
+% low frequency confound: high-pass cutoff (secs) [Inf = no filtering]
+%---------------------------------------------------------------------------
+for ses = 1:nses
+    SPM.xX.K(ses).HParam = 128;
+end
+
+% intrinsic autocorrelations: OPTIONS: 'none'|'AR(1) + w'
+%-----------------------------------------------------------------------
+SPM.xVi.form       = 'AR(1)';
+
+% specify data: matrix of filenames and TR
+%===========================================================================
+
+for ses=1:nses
+    [func_files,dirs] = spm_select('ExtFPList',sessdir{ses},D.filt{1}); % select normalized images
+    tmp{ses} = func_files;
+end
+SPM.xY.P = cat(1,tmp{:});
+
+SPM.xY.RT          = TR;
+
+
+% Configure design matrix
+%===========================================================================
+SPM.swd = D.glmpath;
+cd(SPM.swd)
+SPM = get_spmdesign(SPM,Sess); % External function builds full SPM design matrix structure (U, timing, parametric modulators, etc.)
+
+
+% Estimate parameters
+%===========================================================================
+
+spm_mat_dir = fullfile(D.glmpath,'SPM.mat');
+
+
+if exist(spm_mat_dir) ==2; delete(spm_mat_dir);end % suppress existing spm.mat
+maskfile= fullfile(D.glmpath,'mask.nii');
+if exist(maskfile) ==2; delete(maskfile);end % to prevent spm window
+
+% estimate
+SPM = spm_spm(SPM);
+
+
+% Add extra contrasts
+%===========================================================================
+
+cbase = zeros(1,size(SPM.xX.X,2));
+
+cnam = {};
+cwgt = {};
+ctyp = {};
+
+% Contrast matrix assumes fixed regressor ordering in SPM.xX.X
+% Any change in design requires updating contrast definitions
+indi = {'ME_acc','ME_unc','CvsD_acc','DvsC_acc','CvsD_unc','DvsC_unc'}; % contrast names
+ctst = [0.5 0.5 0 0 ; 0 0 0.5 0.5; -1 1 0 0; 1 -1 0 0; 0 0 -1 1; 0 0 1 -1]; % contrast values
+% construct contrasts 
+for e = 1:length(indi) 
+    
+    tmp     = cbase;
+    tmp(1,1:size(ctst,2)) = ctst(e,:);
+    
+    cnam{e} = indi{e};
+    cwgt{e} = tmp;		
+    ctyp{e} = 'T';
+end
+
+% inform contrasts in matlabbatch
+%---------------------------------------------------------------------------
+
+matlabbatch = {};
+matlabbatch{1}.spm.stats.con.spmmat = {spm_mat_dir};
+
+for nCon = 1:size(cnam,2)
+    
+    matlabbatch{1}.spm.stats.con.consess{nCon}.tcon.name    = cnam{nCon};
+    matlabbatch{1}.spm.stats.con.consess{nCon}.tcon.convec  = cwgt{nCon};
+    matlabbatch{1}.spm.stats.con.consess{nCon}.tcon.sessrep = 'none';
+    
+end
+
+% delete already existing contrasts
+matlabbatch{1}.spm.stats.con.delete = 1;
+
+% run the job
+ % spm_jobman('interactive', matlabbatch)
+spm_jobman('run',matlabbatch)
+
+
+clear
