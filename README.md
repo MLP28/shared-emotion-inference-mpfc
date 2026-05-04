@@ -12,7 +12,7 @@ This repository contains the MATLAB analysis code associated with the paper:
 The code implements three fMRI analysis pipelines using SPM12:
 
 - **Univariate analysis** — preprocessing, first-level GLM
-- **RSA (Representational Similarity Analysis)** — searchlight RSA using the [Viviani et al. toolbox](https://github.com/viviani-rsa/rsa-rsm)
+- **RSA (Representational Similarity Analysis)** — searchlight RSA using the [Viviani et al. toolbox](https://github.com/roberto-viviani/rsa-rsm)
 - **PPI (Psychophysiological Interaction)** — seed-based functional connectivity analysis
 
 ---
@@ -60,7 +60,7 @@ matlab_codes_for_publication/
 ## Dependencies
 
 - [SPM12](https://www.fil.ion.ucl.ac.uk/spm/software/spm12/) — neuroimaging analysis toolbox
-- [Viviani RSA toolbox](https://github.com/viviani-rsa/rsa-rsm) — searchlight RSA (Viviani et al., 2021)
+- [Viviani RSA toolbox](https://github.com/roberto-viviani/rsa-rsm) — searchlight RSA (Viviani et al., 2021)
 - MATLAB Statistics and Machine Learning Toolbox (`fitdist`)
 
 > **Important:** SPM orthogonalization must be manually disabled before running the univariate first-level analysis. Comment out line 116 in `spm_get_ons.m` and lines 242–244 in `spm_fMRI_design.m`. See [this reference](http://imaging.mrc-cbu.cam.ac.uk/imaging/ParametricModulations) for details.
