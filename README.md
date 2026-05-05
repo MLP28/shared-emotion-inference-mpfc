@@ -20,8 +20,6 @@ The code implements three fMRI analysis pipelines using SPM12:
 ## Repository Structure
 
 ```
-matlab_codes_for_publication/
-│
 ├── data/
 │   ├── COST/                        # Raw MRI data (group 1)
 │   ├── COSSA/                       # Raw MRI data (group 2)
@@ -31,7 +29,6 @@ matlab_codes_for_publication/
 │       ├── infRT_prestudy/          # Reaction times from pre-study 2
 │       ├── emointensity_prestudy/   # Emotion ratings from pre-study 1
 │       └── infotask/                # Task information (infoemo.xlsx)
-
 │
 ├── dependency/
 │   └── rsa-rsm-master/              # Viviani RSA toolbox (external)
@@ -48,10 +45,10 @@ matlab_codes_for_publication/
 │   ├── fun/                         # RSA helper functions
 │   └── error/
 │
-├── fun_PPI/                         # PPI-specific functions
-│   ├── cos_run_ppi.m                # PPI entry function for first level
-│   ├── fun/                         # PPI helper functions
-│   └── error/
+└── fun_PPI/                         # PPI-specific functions
+    ├── cos_run_ppi.m                # PPI entry function for first level
+    ├── fun/                         # PPI helper functions
+    └── error/
 
 ```
 
