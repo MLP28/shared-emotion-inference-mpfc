@@ -3,7 +3,7 @@
 This repository contains the MATLAB analysis code associated with the paper:
 
 > **Socially shared emotions shape the activity of the medial prefrontal cortex during inference of others' emotional states**  
-> Le Petit, Gagnepain, ... Laisney, 2026 Cell Reports (accepted in principle; pending final revisions).
+> Le Petit, Gagnepain, ... Laisney, Cell Reports (accepted in principle; pending final revisions).
 
 ---
 
@@ -145,3 +145,16 @@ Marine Le Petit (marine.lepetit@uliege.be)
 Pierre Gagnepain (gagnepain@cyceron.fr)
 Mickaël Laisney (mickael.laisney@ephe.psl.eu)
 U1077 NIMH, Caen, France
+
+---
+
+## Citation
+
+If you use this code, please cite:
+
+Le Petit et al.,
+Socially shared emotions shape the activity of the medial prefrontal cortex during inference of others' emotional states.
+Cell Reports (accepted in principle; pending final revisions).
+
+Code:
+https://doi.org/10.5281/zenodo.20036054
